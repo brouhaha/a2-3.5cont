@@ -1,7 +1,7 @@
 ; Apple II 3.5 Disk Controller Card
 ; Firmware P/N 341-0438A
 ; Copyright (C) Apple Computer Inc. 1991
-; Disassembly Copyright (C) Eric Smith 2014
+; Disassembly Copyright 2014, 2018 Eric Smith <spacewar@gmail.com>
 
 fillto	macro	addr
 	while	* < addr
@@ -53,22 +53,22 @@ D0803	equ	$0803
 D09ff	equ	$09ff
 
 ; SWIM chip - IWM registers
-D0a00	equ	$0a00	; phase 0 off		data/corr (r/w)
-D0a01	equ	$0a01	; phase 0 on		header (r/w)
-D0a02	equ	$0a02	; phase 1 off		error (r)/CRC (w)
-D0a03	equ	$0a03	; phase 1 on		param data (r/w)
-D0a04	equ	$0a04	; phase 2 off		phase (r/w)
-D0a05	equ	$0a05	; phase 2 on		setup (r/w)
-D0a06	equ	$0a06	; phase 3 off		status (r)/write zeros (w)
-D0a07	equ	$0a07	; phase 3 on		handshake (r)/write ones (w)
-D0a08	equ	$0a08	; motor off
-D0a09	equ	$0a09	; motor on
-D0a0a	equ	$0a0a	; enable drive 1
-D0a0b	equ	$0a0b	; enable drive 2
-D0a0c	equ	$0a0c	; Q6 low
-D0a0d	equ	$0a0d	; Q6 high
-D0a0e	equ	$0a0e	; Q7 low
-D0a0f	equ	$0a0f	; Q7 high
+iwm_ph0_off	equ	$0a00	; phase 0 off		data/corr (r/w)
+iwm_ph0_on	equ	$0a01	; phase 0 on		header (r/w)
+iwm_ph1_off	equ	$0a02	; phase 1 off		error (r)/CRC (w)
+iwm_ph1_on	equ	$0a03	; phase 1 on		param data (r/w)
+iwm_ph2_off	equ	$0a04	; phase 2 off		phase (r/w)
+iwm_ph2_on	equ	$0a05	; phase 2 on		setup (r/w)
+iwm_ph3_off	equ	$0a06	; phase 3 off		status (r)/write zeros (w)
+iwm_ph3_on	equ	$0a07	; phase 3 on		handshake (r)/write ones (w)
+iwm_motor_off	equ	$0a08	; motor off
+iwm_motor_on	equ	$0a09	; motor on
+iwm_sel_drive_1	equ	$0a0a	; enable drive 1
+iwm_sel_drive_2	equ	$0a0b	; enable drive 2
+iwm_q6l		equ	$0a0c	; Q6 low
+iwm_q6h		equ	$0a0d	; Q6 high
+iwm_q7l		equ	$0a0e	; Q7 low
+iwm_q7h		equ	$0a0f	; Q7 high
 
 ; IWM registers and states
 ; from IWM Design Spec  343-0041-B
@@ -82,6 +82,8 @@ D0a0f	equ	$0a0f	; Q7 high
 ;  1  1    1            write data reg              write load
 
 ; SWIM chip - ISM registers
+; Note: there are probably some references in the code to ISM registers
+; that are currently misidentified as IWM registers
 
 ism_w_data	equ	$0a00
 ism_r_data	equ	$0a08
@@ -244,7 +246,7 @@ mon_oldrst	equ	$ff59	; sets video and keyboard and enters monitor
 reset_vec	equ	$fffc
 
 	org	$8000
-D8000:
+zp_init_tab:
 	phase	$0000
 Z00:	fcb	$ff
 Z01:	fcb	$ff
@@ -377,7 +379,7 @@ Z84:	jmp	Lf1ea	; Verify?
 
 ; zero page jump vectors (not hooks)
 Z87:	jmp	Sd1e7
-Z8a:	jmp	Ld112
+Z8a:	jmp	cmd_init
 
 ; Mark table
 ; see _Apple IIgs Firmware Reference_,
@@ -514,7 +516,7 @@ HLcn23:	php			; save carry (ProDOS vs. SmartPort) and
 	lda	HDc082,x
 	jsr	HScfd9
 
-; copy parameters to card
+; save HZ40..HZ51 in pseudoROM HDCa02..HDCa13
 	ldx	#$12
 HLcn3e:	lda	HZ40-1,x	; HZ40..HZ51 copied to HDCa02..HDCa13
 	sta	HDca02-1,x
@@ -622,7 +624,8 @@ HLcnbc:	pha			; push error code
 	ldx	HD_slotmap,y	; map $C0+slot to slot*10
 	lda	HDc082,x
 
-	ldx	#$00		; copy parameters from card back to host
+; restore HZ40..HZ51 from pseudoROM HDCa02..HDCa13
+	ldx	#$00
 HLcnce:	ldy	HDca02,x
 	sty	HZ40,x
 	inx
@@ -2248,10 +2251,14 @@ H2Dcffa:
 
 	dephase
 
-	cpu	65c02		; done with host code, reset is on-card 65c02
+	cpu	65c02		; done with host code, rest is on-card 65c02
 
-D8e00:	fcb	$55,$0f
+
+; data copied to zero page - all but first two bytes are zero
+D8e00:
+	fcb	$55,$0f
 	fillto	$8f00
+
 
 L8f00:	sei
 	cld
@@ -2290,12 +2297,12 @@ L8f34:	dex
 	bpl	L8f2a
 
 ; Test all of zero page, though most of it will just be zeros
-	jsr	S95b2	; copy 256 bytes from D8e00 to zero page
-	jsr	S95bd	; verify 256 bytes from D8e00 against zero page
+	jsr	copy_D8e00_to_zp
+	jsr	compare_D8e00_to_zp
 	bcc	L8f42
 	jmp	L95cd
 
-L8f42:	jsr	S9559	; copy some of host diagnostic code to host shared ROM
+L8f42:	jsr	copy_diag_to_host	; copy some of host diagnostic code to host shared ROM
 	stz	Z02
 	stz	D7b17+1	; change branch target of HL_diag_load_wait to allow
 			; host to continue
@@ -2308,7 +2315,7 @@ L8f42:	jsr	S9559	; copy some of host diagnostic code to host shared ROM
 	bcc	L8f5a
 	jmp	L95cd
 
-L8f5a:	jsr	S9580
+L8f5a:	jsr	verify_diag_copied_correctly
 	bcc	L8f62
 	jmp	L95cd
 
@@ -2604,7 +2611,7 @@ S917f:	jsr	S9248
 	bcs	L91a1
 	jsr	S91fa
 	stz	D03ff
-	lda	D0a08
+	lda	iwm_motor_off
 	jsr	S929b
 	rts
 
@@ -2614,7 +2621,7 @@ L91a1:	lda	Z05
 	sta	Z08
 	lda	#$4e
 	sta	D03ff
-	lda	D0a08
+	lda	iwm_motor_off
 	jmp	L9269
 
 S91b4:	jsr	Sd80b
@@ -2765,41 +2772,41 @@ L92b0:	lda	Z02
 
 
 ; SWIM chip test
-S92b5:	bit	D0a0e		; Q7L   reset IWM (assumed not to be in ISM mode)
-	bit	D0a0c		; Q6L
-	bit	D0a00		; Ph0 off
-	bit	D0a02		; Ph1 off
-	bit	D0a04		; Ph2 off
-	bit	D0a06		; Ph3 off
-	bit	D0a08		; Motor off
+S92b5:	bit	iwm_q7l		; reset IWM (assumed not to be in ISM mode)
+	bit	iwm_q6l
+	bit	iwm_ph0_off
+	bit	iwm_ph1_off
+	bit	iwm_ph2_off
+	bit	iwm_ph3_off
+	bit	iwm_motor_off
 
-	lda	D0a0e		; Q7L - should read all ones
+	lda	iwm_q7l		; Q6L,Q7L - should read all ones
 	cmp	#$ff
 	beq	L92d3		;   yes
 	sec			;   no, failure
 	rts
 
 L92d3:	lda	#$1f
-	bit	D0a0d		; Q6H
-	sta	D0a0f		; Q7H - write mode register
-	eor	D0a0e		; Q7L - read status register (low 5 match mode reg)
+	bit	iwm_q6h
+	sta	iwm_q7h		; Q6H,Q7H - write mode register
+	eor	iwm_q7l		; Q6H,Q7L - read status register (low 5 match mode reg)
 	and	#$1f		; match?
 	beq	L92e4		;   yes
 	sec			;   no, failure
 	rts
 
 L92e4:	lda	#$00
-	sta	D0a0f		; Q7H - write mode register
-	eor	D0a0e		; Q7L - read status register
+	sta	iwm_q7h		; Q6H,Q7H - write mode register
+	eor	iwm_q7l		; Q6H,Q7L - read status register
 	and	#$1f		; match?
 	beq	L92f2		;   yes
 	sec			;   no, failure
 	rts
 
 L92f2:	lda	#$0f
-	bit	D0a0d		; Q6H
-	sta	D0a0f		; Q7H - write mode register
-	eor	D0a0e		; Q7L - read status register
+	bit	iwm_q6h
+	sta	iwm_q7h		; Q6H,Q7H - write mode register
+	eor	iwm_q7l		; Q6H,Q7L - read status register
 	and	#$1f		; match?
 	beq	L9303		;   yes
 	sec			;   no, failure
@@ -2807,15 +2814,15 @@ L92f2:	lda	#$0f
 
 ; set SWIM to ISM mode
 L9303:	lda	#$4f
-	bit	D0a0d		; Q6H
-	sta	D0a0f		; Q7H - write mode register, MZ=1
+	bit	iwm_q6h
+	sta	iwm_q7h		; Q6H,Q7H - write mode register, MZ=1
 	eor	#$40
-	sta	D0a0f		; Q7H - write mode register, MZ=0
+	sta	iwm_q7h		; Q6H,Q7H - write mode register, MZ=0
 	eor	#$40
-	sta	D0a0f		; Q7H - write mode register, MZ=1
-	sta	D0a0f		; Q7H - write mode register, MZ=1
+	sta	iwm_q7h		; Q6H,Q7H - write mode register, MZ=1
+	sta	iwm_q7h		; Q6H,Q7H - write mode register, MZ=1
 
-	lda	#$05		; wait to meed IWM-to-ISM timing spec
+	lda	#$05		; wait to meet IWM-to-ISM timing spec
 L931a:	dec
 	bne	L931a
 
@@ -2858,46 +2865,46 @@ L934f:	cmp	ism_r_param
 L935a:	sec
 	rts
 
-
 L935c:	lda	#$f8		; switch SWIM from ISM to IWM mode
 	sta	ism_w_zeros
 
-	bit	D0a0e		; Q7L   reset IWM (assumed not to be in ISM mode)
-	bit	D0a0c		; Q6L
-	bit	D0a00		; Ph0 off
-	bit	D0a02		; Ph1 off
-	bit	D0a04		; Ph2 off
-	bit	D0a06		; Ph3 off
-	bit	D0a08		; Motor off
+	bit	iwm_q7l		; reset IWM (assumed not to be in ISM mode)
+	bit	iwm_q6l
+	bit	iwm_ph0_off
+	bit	iwm_ph1_off
+	bit	iwm_ph2_off
+	bit	iwm_ph3_off
+	bit	iwm_motor_off
 
-	lda	D0a0e		; Q7L - should read all ones
+	lda	iwm_q7l		; Q6L,Q7L - should read all ones
 	cmp	#$ff
 	beq	L937f		;   yes
 	sec			;   no, failure
 	rts
 
+
 ; repeat IWM tests
 L937f:	lda	#$1f
-	bit	D0a0d
-	sta	D0a0f
-	eor	D0a0e
+	bit	iwm_q6h
+	sta	iwm_q7h
+	eor	iwm_q7l
 	and	#$1f
 	beq	L9390
 	sec
 	rts
 
 L9390:	lda	#$00
-	sta	D0a0f
-	eor	D0a0e
+	sta	iwm_q7h
+	eor	iwm_q7l
 	and	#$1f
 	beq	L939e
 	sec
 	rts
 
 L939e:	lda	#$0f
-	bit	D0a0d
-	sta	D0a0f
-	eor	D0a0e
+	bit	iwm_q6h
+	sta	iwm_q7h
+	eor	iwm_q7l
 	and	#$1f
 	bne	L93af
 	clc
@@ -2905,6 +2912,7 @@ L939e:	lda	#$0f
 
 L93af:	sec
 	rts
+
 
 ; compute ROM checksum
 S93b1:	stz	Zfe
@@ -3048,6 +3056,7 @@ L9530:	lda	Dffda+1,x
 L953e:	clc
 	rts
 
+
 ; verify slot pseudoROM (7b00, host cn00) against slot ROM image (8100),
 ; except that Cn18 is expected to be $00
 verify_slot_pseudorom:
@@ -3067,8 +3076,10 @@ L954d:	cmp	D7b00,x
 L9557:	sec
 	rts
 
+
 ; copy some of diagnostic code to host shared ROM
-S9559:	ldx	#$00
+copy_diag_to_host:
+	ldx	#$00
 L955b:	lda	D8800+$0200,x
 	sta	D7c00,x
 	dex
@@ -3087,7 +3098,8 @@ L9576:	lda	D8800+$0500,x
 	bne	L9576
 	rts
 
-S9580:	ldx	#$00		; verify diagnostic code copied correctly
+verify_diag_copied_correctly:
+	ldx	#$00
 L9582:	lda	D8800+$0200,x
 	cmp	D7c00,x
 	bne	L95b0
@@ -3114,14 +3126,17 @@ L95a3:	lda	D8800+$0500,x
 L95b0:	sec
 	rts
 
-S95b2:	ldx	#$00
+
+copy_D8e00_to_zp:
+	ldx	#$00
 L95b4:	lda	D8e00,x
 	sta	Z00,x
 	dex
 	bne	L95b4
 	rts
 
-S95bd:	ldx	#$00
+compare_D8e00_to_zp:
+	ldx	#$00
 L95bf:	lda	D8e00,x
 	cmp	Z00,x
 	bne	L95cb
@@ -3132,6 +3147,7 @@ L95bf:	lda	D8e00,x
 
 L95cb:	sec
 	rts
+
 
 ; test fail
 L95cd:	lda	#$4f
@@ -3201,11 +3217,12 @@ L9636:	nop
 	bne	L95d1
 	jmp	L928c
 
+
 ; copy 35 bytes of slot ROM image into slot pseudoROM
-; (minimum required while on-board
-; processor is doing a self-test?)
+; (minimum required while on-board processor is doing
+; self-test and initialization)
 ; rest copied later
-L9649:	ldy	#$22
+reset2:	ldy	#(HLcn23-HLcn00)-1
 L964b:	lda	D8100,y
 	sta	D7b00,y
 	dey
@@ -3255,78 +3272,78 @@ L968d:	txa
 	beq	L9697
 	jmp	L9888
 
-L9697:	bit	D0a0e		; Q7L   reset IWM (assumed not to be in ISM mode)
-	bit	D0a0c		; Q6L
-	bit	D0a00		; Ph0 off
-	bit	D0a02		; Ph1 off
-	bit	D0a04		; Ph2 off
-	bit	D0a06		; Ph3 off
-	bit	D0a08		; Motor off
+L9697:	bit	iwm_q7l		; reset IWM (assumed not to be in ISM mode)
+	bit	iwm_q6l
+	bit	iwm_ph0_off
+	bit	iwm_ph1_off
+	bit	iwm_ph2_off
+	bit	iwm_ph3_off
+	bit	iwm_motor_off
 
-	lda	D0a0e		; Q7L - should read all ones
+	lda	iwm_q7l		; Q6L,Q7L - should read all ones
 	cmp	#$ff
 	beq	L96b6		;   yes
 	jmp	L9888		;   no, failure
 
 L96b6:	lda	#$1f
-	bit	D0a0d
-	sta	D0a0f
-	eor	D0a0e
+	bit	iwm_q6h
+	sta	iwm_q7h
+	eor	iwm_q7l
 	and	#$1f
 	beq	L96c8
 	jmp	L9888
 
 L96c8:	lda	#$00
-	sta	D0a0f
-	eor	D0a0e
+	sta	iwm_q7h
+	eor	iwm_q7l
 	and	#$1f
 	beq	L96d7
 	jmp	L9888
 
 L96d7:	lda	#$0f
-	bit	D0a0d
-	sta	D0a0f
-	eor	D0a0e
+	bit	iwm_q6h
+	sta	iwm_q7h
+	eor	iwm_q7l
 	and	#$1f
 	beq	L96e9
 	jmp	L9888
 
 ; set SWIM to ISM mode
 L96e9:	lda	#$4f
-	bit	D0a0d
-	sta	D0a0f
+	bit	iwm_q6h
+	sta	iwm_q7h
 	eor	#$40
-	sta	D0a0f
+	sta	iwm_q7h
 	eor	#$40
-	sta	D0a0f
-	sta	D0a0f
+	sta	iwm_q7h
+	sta	iwm_q7h
 	lda	#$05
 L9700:	dec
 	bne	L9700
-	lda	D0a0c
+	lda	iwm_q6l
 	cmp	#$f0
 	bne	L9740
-	lda	D0a0e
+	lda	iwm_q7l
 	and	#$c0
 	cmp	#$40
 	bne	L9740
-	stz	D0a06
+	stz	iwm_ph3_off
 	lda	#$01
-L9718:	sta	D0a03
+L9718:	sta	iwm_ph1_on
 	asl
 	bcc	L9718
 	lda	#$fe
-L9720:	sta	D0a03
+L9720:	sta	iwm_ph1_on
 	rol
 	bcs	L9720
-	stz	D0a06
+	stz	iwm_ph3_off
 	lda	#$01
-L972b:	cmp	D0a0b
+L972b:	cmp	iwm_sel_drive_2
 	bne	L9740
 	asl
 	bcc	L972b
 	lda	#$fe
-L9735:	cmp	D0a0b
+L9735:	cmp	iwm_sel_drive_2
 	bne	L9740
 	sec
 	rol
@@ -3337,38 +3354,38 @@ L9740:	jmp	L9888
 L9743:	lda	#$f8		; switch SWIM from ISM to IWM mode
 	sta	ism_w_zeros
 
-	bit	D0a0e		; Q7L   reset IWM (assumed not to be in ISM mode)
-	bit	D0a0c		; Q6L
-	bit	D0a00		; Ph0 off
-	bit	D0a02		; Ph1 off
-	bit	D0a04		; Ph2 off
-	bit	D0a06		; Ph3 off
-	bit	D0a08		; Motor off
+	bit	iwm_q7l		; reset IWM (assumed not to be in ISM mode)
+	bit	iwm_q6l
+	bit	iwm_ph0_off
+	bit	iwm_ph1_off
+	bit	iwm_ph2_off
+	bit	iwm_ph3_off
+	bit	iwm_motor_off
 
-	lda	D0a0e		; Q7L - should read all ones
+	lda	iwm_q7l		; Q6L,Q7L should read all ones
 	cmp	#$ff
 	beq	L9767		;   yes
 	jmp	L9888		;   no, failure
 
 L9767:	lda	#$1f
-	bit	D0a0d
-	sta	D0a0f
-	eor	D0a0e
+	bit	iwm_q6h
+	sta	iwm_q7h
+	eor	iwm_q7l
 	and	#$1f
 	beq	L9779
 	jmp	L9888
 
 L9779:	lda	#$00
-	sta	D0a0f
-	eor	D0a0e
+	sta	iwm_q7h
+	eor	iwm_q7l
 	and	#$1f
 	beq	L9788
 	jmp	L9888
 
 L9788:	lda	#$0f
-	bit	D0a0d
-	sta	D0a0f
-	eor	D0a0e
+	bit	iwm_q6h
+	sta	iwm_q7h
+	eor	iwm_q7l
 	and	#$1f
 	beq	L979a
 	jmp	L9888
@@ -3607,29 +3624,36 @@ Pd10c:	jmp	Se600
 
 Pd10f:	jmp	Lec77
 
-Ld112:	jsr	Sd7cc
+
+cmd_init:
+	jsr	Sd7cc
 	jsr	Sf73c
-	bit	D0a08
+	bit	iwm_motor_off
 	stz	Z01
 
-RESET:	cld
+reset:	cld
 	sei
 	ldx	#$ff
 	txs
 	stz	Z00
 	lda	Z6f
-	jmp	L9649
+	jmp	reset2
+
 
 Ld129:	lda	Z6f
-	jsr	Sd319
+	jsr	copy_rom_to_host_pseudorom
+
 	ldx	#$04
 Ld130:	dex
 	bmi	Ld13f
+
 	lda	Zbc+$8000,x
 	cmp	Zbc,x
 	beq	Ld130
+
 	jsr	Sd2a1
 	bra	Ld188
+
 Ld13f:	jsr	Sd2ea
 	ldx	#$ff
 	stx	Z2f
@@ -3669,8 +3693,8 @@ Ld188:	bit	Z6f
 	stx	Z2f
 	jsr	Sd7b0
 	ldx	Z6f
-	lda	D0a0a,x
-	bit	D0a09
+	lda	iwm_sel_drive_1,x
+	bit	iwm_motor_on
 	jsr	Sed05
 Ld19e:	lda	#$ff
 	sta	Z01
@@ -3704,7 +3728,7 @@ Ld1d5:	stz	Zae
 	jsr	Sd80b
 	lda	Z00
 	bpl	Ld1cc
-	bit	D0a08
+	bit	iwm_motor_off
 	ldx	#$03
 	bra	Ld1a6
 
@@ -3758,7 +3782,7 @@ Ld235:	ldx	Z03
 	lda	Z00
 	cmp	#$0d
 	bcc	Ld257
-Ld246:	bra	Ld295
+Ld246:	bra	cmd_bad
 Ld248:	lda	#$1f
 	jsr	Sd651
 	jsr	Sd7b0
@@ -3783,23 +3807,26 @@ Ld257:	ldx	#$ff
 Ld275:	clc
 	rts
 
-Dd277:	fdb	Led66
-	fdb	Ldf25
-	fdb	Le0bf
-	fdb	Lefad
-	fdb	Leba2
-	fdb	Ld112
-	fdb	Ld295
-	fdb	Ld295
-	fdb	Lde50
-	fdb	Lde50
+
+Dd277:	fdb	cmd_status
+	fdb	cmd_readblock
+	fdb	cmd_writeblock
+	fdb	cmd_format
+	fdb	cmd_control
+	fdb	cmd_init
+	fdb	cmd_bad		; open
+	fdb	cmd_bad		; close
+	fdb	cmd_read
+	fdb	cmd_write
 	fdb	Lef73
 	fdb	Lee77
 	fdb	Le1ae
 	fdb	Le2c0
 	fdb	Le33b
 
-Ld295:	lda	#$01
+
+cmd_bad:
+	lda	#$01
 Sd297:	clc
 	sta	Z56
 	stz	Z01
@@ -3808,7 +3835,7 @@ Sd297:	clc
 Ld29d:	lda	#$22
 	bra	Sd297
 
-Sd2a1:	jsr	Sd301
+Sd2a1:	jsr	zp_init
 	lda	#$d2
 	sta	Zbb
 	lda	#$75
@@ -3821,7 +3848,7 @@ Sd2a1:	jsr	Sd301
 	lda	#$1f
 	jsr	Sd651
 	jsr	Sd7cc
-	jsr	Sf71d
+	jsr	smartport_bus_reset
 	jsr	Sd7b0
 	jsr	Sf73c
 	jsr	Sd7cc
@@ -3853,22 +3880,29 @@ Ld2fd:	dex
 	bpl	Ld2ee
 	rts
 
-Sd301:	ldx	#$bb
-Ld303:	lda	D8000,x
+
+; initializes zero page addr $01 through $bb
+zp_init:
+	ldx	#$bb
+Ld303:	lda	zp_init_tab,x
 	sta	Z00,x
 	dex
 	bne	Ld303
 	rts
 
+
+; initializes zero page addr $bc through $bf
 Sd30c:	ldx	#$bf
-Ld30e:	lda	D8000,x
+Ld30e:	lda	zp_init_tab,x
 	sta	Z00,x
 	dex
 	cpx	#$bb
 	bne	Ld30e
 	rts
 
-Sd319:	ldy	#$00		; copy cn00 slot ROM image into slot pseudoROM
+
+copy_rom_to_host_pseudorom:
+	ldy	#$00		; copy cn00 slot ROM image into slot pseudoROM
 Ld31b:	lda	D8100,y
 	sta	D7b00,y
 	iny
@@ -3900,6 +3934,7 @@ Ld324:	lda	D8200,y		; copy ca00-cfff shared ROM image
 	sta	D0bc0
 	sta	D0be0
 	rts
+
 
 Sd362:	jsr	Sd80b
 	ldx	#$00
@@ -3933,10 +3968,10 @@ Ld398:	stx	Z33
 Ld3a1:	rts
 
 Sd3a2:	jsr	Sd7b0
-	lda	D0a0a,x
-	bit	D0a0c
-	bit	D0a0e
-	bit	D0a09
+	lda	iwm_sel_drive_1,x
+	bit	iwm_q6l
+	bit	iwm_q7l
+	bit	iwm_motor_on
 	lda	#$01
 	jsr	Sd888
 	lda	#$00
@@ -4281,22 +4316,22 @@ Sd645:	lda	Z16
 Ld64d:	sta	D0a40
 	rts
 
-Sd651:	bit	D0a0e
+Sd651:	bit	iwm_q7l
 	tay
-	bit	D0a08
-	bit	D0a0d
-Ld65b:	lda	D0a0e
+	bit	iwm_motor_off
+	bit	iwm_q6h
+Ld65b:	lda	iwm_q7l
 	and	#$20
 	bne	Ld65b
 	bra	Ld667
-Ld664:	sty	D0a0f
+Ld664:	sty	iwm_q7h
 Ld667:	tya
-	eor	D0a0e
+	eor	iwm_q7l
 	and	#$1f
 	bne	Ld664
 	lda	#$40
 	trb	Zb4
-	lda	D0a0c
+	lda	iwm_q6l
 	rts
 
 
@@ -4386,17 +4421,17 @@ Sd6e8:	stz	Zb4
 	stz	Z6a
 	jsr	Sd714
 	lda	#$00
-	sta	D0a05
+	sta	iwm_ph2_on
 	sta	Z6a
-	lda	D0a0d
+	lda	iwm_q6h
 	lda	#$38
-	sta	D0a06
+	sta	iwm_ph3_off
 	lda	#$00
-	sta	D0a02
-	lda	D0a0e
-	lda	D0a0c
+	sta	iwm_ph1_off
+	lda	iwm_q7l
+	lda	iwm_q6l
 	ora	#$f0
-	sta	D0a04
+	sta	iwm_ph2_off
 	jsr	Sd677
 	jmp	Sd76e
 
@@ -4405,30 +4440,30 @@ Sd714:	phx
 	bit	Zb4
 	bvs	Ld743
 
-	bit	D0a0e
-	bit	D0a0d
-	lda	D0a0e
+	bit	iwm_q7l
+	bit	iwm_q6h
+	lda	iwm_q7l
 	pha
-	bit	D0a08
+	bit	iwm_motor_off
 	and	#$1f
 	ora	#$40
-	sta	D0a0f
+	sta	iwm_q7h
 	eor	#$40
-	sta	D0a0f
+	sta	iwm_q7h
 	eor	#$40
-	sta	D0a0f
-	sta	D0a0f
+	sta	iwm_q7h
+	sta	iwm_q7h
 	lda	#$40
 	tsb	Zb4
 	pla
 	bit	#$20
 	beq	Ld767
-Ld743:	lda	D0a0e
+Ld743:	lda	iwm_q7l
 	and	#$06
 	cmp	#$06
 	bne	Ld751
 	lda	#$06
-	sta	D0a06
+	sta	iwm_ph3_off
 
 Ld751:	ldx	Z2f		; drive number
 	cpx	#$02		; out of range?
@@ -4440,7 +4475,7 @@ Ld751:	ldx	Z2f		; drive number
 	lda	#$80		; turn on motor
 	sta	ism_w_ones
 Ld767:	plx
-	lda	D0a0e
+	lda	ism_r_status
 	rts
 
 Dd76c:	fcb	$02,$04		; drive enable table for ISM mode
@@ -4458,8 +4493,8 @@ Sd76e:	lda	ism_r_status	; save motor on state
 	pha			; delay
 	pla
 
-	bit	D0a0e		; Q7L
-	bit	D0a0c		; Q6L
+	bit	iwm_q7l
+	bit	iwm_q6l
 
 	lda	#$40
 	trb	Zb4
@@ -4471,7 +4506,7 @@ Sd76e:	lda	ism_r_status	; save motor on state
 	ldx	Z2f
 	cpx	#$02
 	bcs	Ld795
-	bit	D0a0a,x
+	bit	iwm_sel_drive_1,x
 Ld795:	plx
 	rts
 
@@ -4480,9 +4515,9 @@ Ld797:	phx
 	bit	#$04
 	beq	Ld7a0
 	ldx	#$01
-Ld7a0:	bit	D0a0a,x
+Ld7a0:	bit	iwm_sel_drive_1,x
 	plx
-	bit	D0a09
+	bit	iwm_motor_on
 	rts
 
 
@@ -4492,19 +4527,21 @@ Sd7a8:	bit	Zb4
 	jsr	Sd76e
 Ld7af:	rts
 
+
 Sd7b0:	pha
 	lda	#$02
 	bit	Z6a
 	bne	Ld7ca
 	jsr	Sd714
 	lda	#$02
-	ora	D0a0d
-	sta	D0a05
+	ora	iwm_q6h
+	sta	iwm_ph2_on
 	sta	Z6a
-	cmp	D0a0d
+	cmp	iwm_q6h
 	jsr	Sd76e
 Ld7ca:	pla
 	rts
+
 
 Sd7cc:	pha
 	lda	#$02
@@ -4512,10 +4549,10 @@ Sd7cc:	pha
 	beq	Ld7e6
 	jsr	Sd714
 	lda	#$fd
-	and	D0a0d
-	sta	D0a05
+	and	iwm_q6h
+	sta	iwm_ph2_on
 	sta	Z6a
-	cmp	D0a0d
+	cmp	iwm_q6h
 	jsr	Sd76e
 Ld7e6:	pla
 	rts
@@ -4527,12 +4564,12 @@ Sd7e8:	lda	#$80
 	bne	Ld80a
 	jsr	Sd714
 	lda	#$20
-	sta	D0a07
-	ora	D0a0d
-	sta	D0a05
+	sta	iwm_ph3_on
+	ora	iwm_q6h
+	sta	iwm_ph2_on
 	sta	Z6a
 	lda	#$40
-	sta	D0a02
+	sta	iwm_ph1_off
 	jsr	Sd76e
 Ld80a:	rts
 
@@ -4543,13 +4580,13 @@ Sd80b:	lda	#$80
 	beq	Ld82f
 	jsr	Sd714
 	lda	#$20
-	sta	D0a06
-	lda	D0a0d
+	sta	iwm_ph3_off
+	lda	iwm_q6h
 	and	#$df
-	sta	D0a05
+	sta	iwm_ph2_on
 	sta	Z6a
 	lda	#$00
-	sta	D0a02
+	sta	iwm_ph1_off
 	jsr	Sd76e
 Ld82f:	lda	#$1f
 	jsr	Sd651
@@ -4561,13 +4598,13 @@ Sd835:	cpx	#$02
 	jsr	Sd714
 	lda	Dd76c,x
 	ora	#$80
-	sta	D0a07
+	sta	iwm_ph3_on
 	lda	#$32
 Ld848:	dec
 	bne	Ld848
-	lda	D0a0d
+	lda	iwm_q6h
 	and	#$fd
-	sta	D0a05
+	sta	iwm_ph2_on
 	sta	Z6a
 	lda	#$19
 Ld857:	dec
@@ -4575,13 +4612,13 @@ Ld857:	dec
 	jsr	Sd76e
 Ld85d:	rts
 
-Sd85e:	bit	D0a00
-	bit	D0a03
-	bit	D0a06
-	bit	D0a04
+Sd85e:	bit	iwm_ph0_off
+	bit	iwm_ph1_on
+	bit	iwm_ph3_off
+	bit	iwm_ph2_off
 	lsr
 	bcc	Ld870
-	bit	D0a05
+	bit	iwm_ph2_on
 Ld870:	lsr
 	bcc	Ld878
 	bit	D0a41
@@ -4589,20 +4626,20 @@ Ld870:	lsr
 Ld878:	bit	D0a40
 Ld87b:	lsr
 	bcc	Ld881
-	bit	D0a01
+	bit	iwm_ph0_on
 Ld881:	lsr
 	bcs	Ld887
-	bit	D0a02
+	bit	iwm_ph1_off
 Ld887:	rts
 
 Sd888:	jsr	Sd85e
-	bit	D0a07
-	bit	D0a06
+	bit	iwm_ph3_on
+	bit	iwm_ph3_off
 	rts
 
 Sd892:	jsr	Sd85e
-	bit	D0a0d
-	lda	D0a0e
+	bit	iwm_q6h
+	lda	iwm_q7l
 	and	#$80
 	asl
 	rts
@@ -4614,7 +4651,7 @@ Sd89f:	lda	#$0b
 	ldy	#$e8
 Ld8aa:	lda	#$92
 	sta	Z30
-Ld8ae:	bit	D0a0e
+Ld8ae:	bit	iwm_q7l
 	bpl	Ld8bf
 	dec	Z30
 	bne	Ld8ae
@@ -4631,14 +4668,14 @@ Ld8c0:	rts
 Sd8c1:	lda	#$0b
 	jsr	Sd892
 	bcc	Ld8d0
-Ld8c8:	lda	D0a0e
+Ld8c8:	lda	iwm_q7l
 	and	#$80
 	bmi	Ld8c8
 	asl
 Ld8d0:	rts
 
 Sd8d1:	jsr	Sd892
-Ld8d4:	lda	D0a0e
+Ld8d4:	lda	iwm_q7l
 	and	#$80
 	bpl	Ld8d4
 	asl
@@ -4707,8 +4744,8 @@ Sd93d:	lda	#$03
 	clc
 Ld94c:	rts
 
-Sd94d:	lda	D0a0a,x
-	bit	D0a09
+Sd94d:	lda	iwm_sel_drive_1,x
+	bit	iwm_motor_on
 
 Sd953:	lda	Z46,x
 	sta	Z3f
@@ -5196,7 +5233,9 @@ Lde4a:	lda	Z57
 	clc
 	rts
 
-Lde50:	lda	#$11
+cmd_read:
+cmd_write:
+	lda	#$11
 	ldx	Z2f
 	bpl	Lde59
 Lde56:	jmp	Sd297
@@ -5233,7 +5272,7 @@ Lde7c:	lda	Z0b
 	lda	Z00
 	cmp	#$01
 	beq	Lde9d
-	jmp	Le0bf
+	jmp	cmd_writeblock
 
 Lde9d:	jsr	Sdec6
 	bcs	Ldec4
@@ -5302,7 +5341,8 @@ Ldf11:	lda	Z2a
 Ldf23:	clc
 	rts
 
-Ldf25:	lda	#$11
+cmd_readblock:
+	lda	#$11
 	ldx	Z2f
 	bpl	Ldf2e
 Ldf2b:	jmp	Sd297
@@ -5505,7 +5545,8 @@ Le0b4:	jsr	Sd7a8
 Le0bd:	sec
 	rts
 
-Le0bf:	lda	#$11
+cmd_writeblock:
+	lda	#$11
 	ldx	Z2f
 	bmi	Le0cf
 	jsr	Sd905
@@ -5937,8 +5978,8 @@ Le507:	jmp	Z72	; hook to immediately following Le50a
 
 Le50a:	jsr	Se600
 	stz	Z57
-	lda	D0a0c
-	lda	D0a0e
+	lda	iwm_q6l
+	lda	iwm_q7l
 	lda	#$08
 	sta	Zad
 	ldy	#$00
@@ -5947,7 +5988,7 @@ Le51d:	dey
 	bne	Le524
 	dec	Zad
 	beq	Le585
-Le524:	lda	D0a0c
+Le524:	lda	iwm_q6l
 	bpl	Le524
 	cmp	Z9f,x
 	bne	Le51b
@@ -5955,7 +5996,7 @@ Le524:	lda	D0a0c
 	bpl	Le51d
 	ldx	#$04
 	stz	Z1e
-Le534:	ldy	D0a0c
+Le534:	ldy	iwm_q6l
 	bpl	Le534
 	lda	Se500,y
 	sta	Z27,x
@@ -5965,11 +6006,11 @@ Le534:	ldy	D0a0c
 	bpl	Le534
 	tay
 	bne	Le589
-Le548:	ldx	D0a0c
+Le548:	ldx	iwm_q6l
 	bpl	Le548
 	cpx	Z97+2
 	bne	Le589
-Le551:	ldx	D0a0c
+Le551:	ldx	iwm_q6l
 	bpl	Le551
 	cpx	Z97+1
 	bne	Le589
@@ -6027,8 +6068,8 @@ denib_table	equ	*-$96
 Se600:	lda	#$01
 	jsr	Sd892
 	jsr	Sd645
-	bit	D0a0c
-	bit	D0a0e
+	bit	iwm_q6l
+	bit	iwm_q7l
 	rts
 
 
@@ -6048,14 +6089,14 @@ Le619:	stz	Z21
 Le623:	ldx	#$02
 Le625:	dey
 	beq	Le642
-Le628:	lda	D0a0c
+Le628:	lda	iwm_q6l
 	bpl	Le628
 	cmp	Z8e,x
 	bne	Le623
 	dex
 	bpl	Le625
 	ldy	#$0c
-Le636:	ldx	D0a0c
+Le636:	ldx	iwm_q6l
 	bpl	Le636
 	lda	denib_table,x
 	eor	Z2a
@@ -6064,7 +6105,7 @@ Le642:	lda	#$01
 	jmp	Le78f
 
 Le647:	clc
-Le648:	ldx	D0a0c
+Le648:	ldx	iwm_q6l
 	bpl	Le648
 	adc	Z1f
 	cmp	#$80
@@ -6072,7 +6113,7 @@ Le648:	ldx	D0a0c
 	sta	Z1f
 	lda	denib_table,x
 	sta	Z23
-Le659:	ldx	D0a0c
+Le659:	ldx	iwm_q6l
 	bpl	Le659
 	lda	denib_table,x
 	ldx	Z23
@@ -6082,7 +6123,7 @@ Le659:	ldx	D0a0c
 	dey
 	adc	Z21
 	sta	Z21
-Le670:	ldx	D0a0c
+Le670:	ldx	iwm_q6l
 	bpl	Le670
 	lda	denib_table,x
 	ldx	Z23
@@ -6092,7 +6133,7 @@ Le670:	ldx	D0a0c
 	dey
 	adc	Z20
 	sta	Z20
-Le687:	ldx	D0a0c
+Le687:	ldx	iwm_q6l
 	bpl	Le687
 	lda	denib_table,x
 	ldx	Z23
@@ -6102,7 +6143,7 @@ Le687:	ldx	D0a0c
 	dey
 	bne	Le648
 	bra	Le6c2
-Le69e:	ldx	D0a0c
+Le69e:	ldx	iwm_q6l
 	lda	denib_table,x
 	ora	De240,y
 	eor	Z21
@@ -6110,21 +6151,21 @@ Le69e:	ldx	D0a0c
 	inc	Zab
 	adc	Z20
 	sta	Z20
-Le6b1:	ldx	D0a0c
+Le6b1:	ldx	iwm_q6l
 	bpl	Le6b1
 	lda	denib_table,x
 	ora	De280,y
 	eor	Z20
 	sta	(Zab)
 	inc	Zab
-Le6c2:	ldx	D0a0c
+Le6c2:	ldx	iwm_q6l
 	bpl	Le6c2
 	adc	Z1f
 	cmp	#$80
 	rol
 	sta	Z1f
 	ldy	denib_table,x
-Le6d1:	ldx	D0a0c
+Le6d1:	ldx	iwm_q6l
 	bpl	Le6d1
 	lda	denib_table,x
 	ora	De200,y
@@ -6134,7 +6175,7 @@ Le6d1:	ldx	D0a0c
 	sta	Z21
 	inc	Zab
 	bne	Le69e
-	ldx	D0a0c
+	ldx	iwm_q6l
 	lda	denib_table,x
 	ora	De240,y
 	eor	Z21
@@ -6143,20 +6184,20 @@ Le6d1:	ldx	D0a0c
 	sta	Z20
 	inc	Zaf
 	nop
-Le6fc:	ldx	D0a0c
+Le6fc:	ldx	iwm_q6l
 	lda	denib_table,x
 	ora	De280,y
 	eor	Z20
 	sta	(Zaf)
 	inc	Zaf
-Le70b:	ldx	D0a0c
+Le70b:	ldx	iwm_q6l
 	bpl	Le70b
 	adc	Z1f
 	cmp	#$80
 	rol
 	sta	Z1f
 	ldy	denib_table,x
-Le71a:	ldx	D0a0c
+Le71a:	ldx	iwm_q6l
 	bpl	Le71a
 	lda	denib_table,x
 	ora	De200,y
@@ -6165,7 +6206,7 @@ Le71a:	ldx	D0a0c
 	inc	Zaf
 	adc	Z21
 	sta	Z21
-Le72f:	ldx	D0a0c
+Le72f:	ldx	iwm_q6l
 	bpl	Le72f
 	lda	denib_table,x
 	ora	De240,y
@@ -6175,7 +6216,7 @@ Le72f:	ldx	D0a0c
 	sta	Z20
 	inc	Zaf
 	bne	Le6fc
-	ldx	D0a0c
+	ldx	iwm_q6l
 	ldy	denib_table,x
 	lda	De280,y
 	sta	Z23
@@ -6183,7 +6224,7 @@ Le72f:	ldx	D0a0c
 	sta	Z24
 	lda	De200,y
 	ldx	#$02
-Le75b:	ldy	D0a0c
+Le75b:	ldy	iwm_q6l
 	bpl	Le75b
 	ora	denib_table,y
 	eor	Z1f,x
@@ -6192,7 +6233,7 @@ Le75b:	ldy	D0a0c
 	dex
 	bpl	Le75b
 	ldx	#$02
-Le76e:	lda	D0a0c
+Le76e:	lda	iwm_q6l
 	bpl	Le76e
 	cmp	Z97,x
 	bne	Le77c
@@ -6351,22 +6392,22 @@ Se87f:	bit	Zb4	; MFM?
 Le886:	jmp	Z78	; hook to immediately following Le889
 
 ; write data field GCR
-Le889:	bit	D0a0d
+Le889:	bit	iwm_q6h
 	lda	#$ff
-	sta	D0a0f
+	sta	iwm_q7h
 	stz	Z57
 	ldx	#$07
 Le895:	lda	Z8e,x
-Le897:	bit	D0a0c
+Le897:	bit	iwm_q6l
 	bpl	Le897
-	sta	D0a0d
+	sta	iwm_q6h
 	dex
 	bpl	Le895
 	ldy	Z2a
 	lda	Dd000,y
-Le8a7:	bit	D0a0c
+Le8a7:	bit	iwm_q6l
 	bpl	Le8a7
-	sta	D0a0d
+	sta	iwm_q6h
 	ldx	#$ae
 	bra	Le8c6
 Le8b3:	ldy	Z69
@@ -6376,13 +6417,13 @@ Le8b3:	ldy	Z69
 	rol	Z66
 	asl
 	lda	Dd000,y
-	sta	D0a0d
+	sta	iwm_q6h
 	rol	Z66
 Le8c6:	ldy	Z66
 	lda	Dd000,y
-Le8cb:	bit	D0a0c
+Le8cb:	bit	iwm_q6l
 	bpl	Le8cb
-	sta	D0a0d
+	sta	iwm_q6h
 	ldy	Z67
 	lda	D0100,x
 	sta	Z67
@@ -6391,7 +6432,7 @@ Le8cb:	bit	D0a0c
 	asl
 	rol	Z66
 	lda	Dd000,y
-	sta	D0a0d
+	sta	iwm_q6h
 	ldy	Z68
 	lda	D0640,x
 	sta	Z68
@@ -6400,32 +6441,32 @@ Le8cb:	bit	D0a0c
 	asl
 	rol	Z66
 	lda	Dd000,y
-	sta	D0a0d
+	sta	iwm_q6h
 	dex
 	cpx	#$ff
 	bne	Le8b3
 	ldx	#$03
 Le900:	ldy	Z1f,x
 	lda	Dd000,y
-Le905:	bit	D0a0c
+Le905:	bit	iwm_q6l
 	bpl	Le905
-	sta	D0a0d
+	sta	iwm_q6h
 	dex
 	bpl	Le900
 	ldx	#$02
 Le912:	lda	Z97,x
-Le914:	bit	D0a0c
+Le914:	bit	iwm_q6l
 	bpl	Le914
-	sta	D0a0d
+	sta	iwm_q6h
 	dex
 	bpl	Le912
 	lda	#$40
-	and	D0a0c
+	and	iwm_q6l
 	eor	#$40
 	tsb	Z57
-Le928:	bit	D0a0c
+Le928:	bit	iwm_q6l
 	bvs	Le928
-	bit	D0a0e
+	bit	iwm_q7l
 	lda	Z57
 	cmp	#$01
 	rts
@@ -6579,7 +6620,7 @@ Dea38:	fcb	$a1,$fb,$a1,$a1,$a1
 
 
 ; read data field, MFM
-Lea3d:	bit	D0a0a
+Lea3d:	bit	iwm_sel_drive_1
 
 	lda	#$18		; clear write and action bits
 	sta	ism_w_zeros
@@ -6671,7 +6712,7 @@ Leabf:	lda	ism_r_handshake
 
 
 Leae0:	lda	#$18
-	sta	D0a06
+	sta	iwm_ph3_off
 	jsr	Sd76e
 	lda	#$10
 	ora	Z57
@@ -6758,7 +6799,7 @@ Leb7f:	bit	ism_r_handshake
 	and	#$20
 	clc
 	beq	Leb94
-	lda	D0a0a
+	lda	iwm_sel_drive_1
 	sta	Z20
 Leb94:	php
 	ldx	#$78
@@ -6771,7 +6812,8 @@ Leb99:	nop
 	rts
 
 
-Leba2:	ldx	Z05
+cmd_control:
+	ldx	Z05
 	cpx	#$14
 	bcs	Lebca
 	lda	Z2f
@@ -6801,17 +6843,18 @@ Debd3:	fcb	$80,$80,$80,$80,$80,$80,$80,$80
 	fcb	$80,$80,$80,$80,$00,$80,$00,$00
 	fcb	$00,$00,$00,$00
 
+
 Debe7:	fdb	Lec64
 	fdb	Lebca
 	fdb	Lebca
 	fdb	Lebca
-	fdb	Lec77
-	fdb	Lebca
-	fdb	Lebca
-	fdb	Lebca
-	fdb	Lebca
-	fdb	Lec51
-	fdb	Lec39
+	fdb	Lec77	; eject (Apple 3.5, UniDisk 3.5)
+	fdb	Lebca	; sethook (Apple 3.5), execute (UniDisk 3.5)
+	fdb	Lebca	; resethook (Apple 3.5), setaddress (Unidisk 3.5)
+	fdb	Lebca	; setmark (Apple 3.5), download (Unidisk 3.5)
+	fdb	Lebca	; resetmark (Apple 3.5), unidiskstat (UniDisk 3.5)
+	fdb	Lec51	; setsides (Apple 3.5)
+	fdb	Lec39	; setinterleave (Apple 3.5)
 	fdb	Lebca
 	fdb	Lec9e
 	fdb	ResetMark
@@ -6821,6 +6864,7 @@ Debe7:	fdb	Lec64
 	fdb	Lecc0
 	fdb	Lec86
 	fdb	Lec95
+
 
 ResetMark:
 	ldx	#$16
@@ -6991,9 +7035,14 @@ Led42:	lda	#$80
 	clc
 Ded47:	rts
 
-	fcb	"APPLE UNIVERSAL 3.5 CONTROLLER"
 
-Led66:	stz	Z0b
+controller_model_name:
+	fcb	"APPLE UNIVERSAL 3.5 CONTROLLER"
+controller_model_name_len	 equ	*-controller_model_name
+
+
+cmd_status:
+	stz	Z0b
 	stz	Z0c
 	ldx	Z2f
 	bpl	Led89
@@ -7001,15 +7050,18 @@ Led66:	stz	Z0b
 	beq	Ledb4
 	cmp	#$01
 	bne	Led9c
-	ldx	#$1e
+
+	ldx	#controller_model_name_len
 	stx	D0c00
-Led7b:	lda	Ded47,x
+Led7b:	lda	controller_model_name-1,x
 	sta	D0c00,x
 	dex
 	bne	Led7b
+
 	ldx	#$1e
 	inx
 	bra	Leda1
+
 Led89:	ldx	Z05
 	beq	Lede4
 	cpx	#$03
@@ -7265,8 +7317,8 @@ Lefa9:	stz	Z01
 	rts
 
 
-; format
-Lefad:	jmp	Z7e	; hook to immediately following Lefb0
+cmd_format:
+	jmp	Z7e	; hook to immediately following Lefb0
 
 Lefb0:	lda	#$01
 	ldx	Z2f
@@ -7408,17 +7460,17 @@ Sf0b1:	bit	Zb4
 	lda	Df0e8,x
 	tax
 	lda	#$bb
-	bit	D0a0d
-	sta	D0a0f
-Lf0d3:	bit	D0a0c
+	bit	iwm_q6h
+	sta	iwm_q7h
+Lf0d3:	bit	iwm_q6l
 	bpl	Lf0d3
-	sta	D0a0d
+	sta	iwm_q6h
 	dex
 	bne	Lf0d3
 	dey
 	bne	Lf0d3
-	bit	D0a0e
-	bit	D0a0c
+	bit	iwm_q7l
+	bit	iwm_q6l
 Lf0e7:	rts
 
 Df0e8:	fcb	$94
@@ -7456,61 +7508,61 @@ Lf11e:	jsr	Se600
 	sta	Z1c
 	ldy	#$c8
 	lda	#$ff
-	bit	D0a0d
-	sta	D0a0f
+	bit	iwm_q6h
+	sta	iwm_q7h
 Lf12f:	ldx	#$04
 Lf131:	lda	Z92,x
-Lf133:	bit	D0a0c
+Lf133:	bit	iwm_q6l
 	bpl	Lf133
-	sta	D0a0d
+	sta	iwm_q6h
 	dex
 	bpl	Lf131
 	dey
 	bne	Lf12f
 	ldx	#$03
 Lf143:	lda	Z9f,x
-Lf145:	bit	D0a0c
+Lf145:	bit	iwm_q6l
 	bpl	Lf145
-	sta	D0a0d
+	sta	iwm_q6h
 	dex
 	bpl	Lf143
 	ldx	#$04
 Lf152:	ldy	Z27,x
 	lda	Dd000,y
-Lf157:	bit	D0a0c
+Lf157:	bit	iwm_q6l
 	bpl	Lf157
-	sta	D0a0d
+	sta	iwm_q6h
 	dex
 	bpl	Lf152
 	ldx	#$0b
 Lf164:	lda	Z8e,x
-Lf166:	bit	D0a0c
+Lf166:	bit	iwm_q6l
 	bpl	Lf166
-	sta	D0a0d
+	sta	iwm_q6h
 	dex
 	bpl	Lf164
 	ldx	Z2a
 	lda	Dd000,x
-Lf176:	bit	D0a0c
+Lf176:	bit	iwm_q6l
 	bpl	Lf176
-	sta	D0a0d
+	sta	iwm_q6h
 	ldx	#$03
 	ldy	#$eb
 	bra	Lf186
 Lf184:	ldy	#$ea
 Lf186:	lda	#$96
-Lf188:	bit	D0a0c
+Lf188:	bit	iwm_q6l
 	bpl	Lf188
-	sta	D0a0d
+	sta	iwm_q6h
 	dey
 	bne	Lf186
 	dex
 	bne	Lf184
 	ldx	#$01
 Lf198:	lda	Z97+1,x
-Lf19a:	bit	D0a0c
+Lf19a:	bit	iwm_q6l
 	bpl	Lf19a
-	sta	D0a0d
+	sta	iwm_q6h
 	dex
 	bpl	Lf198
 	dec	Z1c
@@ -7522,22 +7574,22 @@ Lf19a:	bit	D0a0c
 	stx	Z2a
 	eor	Z2a
 	ldy	#$ff
-	sty	D0a0d
+	sty	iwm_q6h
 	sta	Z27
 	ldy	#$0a
 	jmp	Lf12f
 
 Lf1c2:	lda	#$40
-	and	D0a0c
+	and	iwm_q6l
 	eor	#$40
 	tsb	Z57
-Lf1cb:	lda	D0a0c
+Lf1cb:	lda	iwm_q6l
 	bpl	Lf1cb
 	lda	#$ff
-	sta	D0a0d
-Lf1d5:	bit	D0a0c
+	sta	iwm_q6h
+Lf1d5:	bit	iwm_q6l
 	bvs	Lf1d5
-	bit	D0a0e
+	bit	iwm_q7l
 	lda	Z57
 	cmp	#$01
 	rts
@@ -7678,16 +7730,16 @@ Lf2b6:	sta	Z1a
 	jsr	Sf730
 Lf2d4:	jsr	Se600
 	jsr	Sd714
-	bit	D0a0a
+	bit	iwm_sel_drive_1
 	lda	#$18
-	sta	D0a06
+	sta	iwm_ph3_off
 	lda	#$10
-	sta	D0a07
+	sta	iwm_ph3_on
 	lda	#$01
-	sta	D0a07
-	sta	D0a06
+	sta	iwm_ph3_on
+	sta	iwm_ph3_off
 	sta	Z2a
-	bit	D0a0a
+	bit	iwm_sel_drive_1
 	ldy	#$34
 	ldx	#$35
 	bit	Zb5
@@ -7695,15 +7747,15 @@ Lf2d4:	jsr	Se600
 	ldy	#$9a
 	ldx	#$1a
 Lf300:	lda	#$4e
-	sta	D0a00
-	sta	D0a00
+	sta	iwm_ph0_off
+	sta	iwm_ph0_off
 	lda	#$08
-	sta	D0a07
-Lf30d:	bit	D0a0f
+	sta	iwm_ph3_on
+Lf30d:	bit	iwm_q7h
 	bpl	Lf30d
 	beq	Lf324
 	lda	#$4e
-	sta	D0a00
+	sta	iwm_ph0_off
 	lda	#$08
 	dey
 	bne	Lf30d
@@ -7712,13 +7764,13 @@ Lf30d:	bit	D0a0f
 	jmp	Lf4ac
 
 Lf324:	lda	#$4e
-	sta	D0a00
+	sta	iwm_ph0_off
 	lda	#$08
-Lf32b:	bit	D0a0f
+Lf32b:	bit	iwm_q7h
 	bpl	Lf32b
 	bne	Lf342
 	lda	#$4e
-	sta	D0a00
+	sta	iwm_ph0_off
 	lda	#$08
 	dey
 	bne	Lf32b
@@ -7727,126 +7779,126 @@ Lf32b:	bit	D0a0f
 	jmp	Lf4ac
 
 Lf342:	lda	#$4e
-	sta	D0a00
+	sta	iwm_ph0_off
 	lda	#$f0
-	sta	D0a04
+	sta	iwm_ph2_off
 	ldx	#$4f
 	lda	#$4e
-Lf350:	bit	D0a0f
+Lf350:	bit	iwm_q7h
 	bpl	Lf350
-	sta	D0a00
+	sta	iwm_ph0_off
 	dex
 	bne	Lf350
 	ldx	#$0c
-Lf35d:	bit	D0a0f
+Lf35d:	bit	iwm_q7h
 	bpl	Lf35d
-	stz	D0a00
+	stz	iwm_ph0_off
 	dex
 	bne	Lf35d
 	ldx	#$03
-Lf36a:	bit	D0a0f
+Lf36a:	bit	iwm_q7h
 	bpl	Lf36a
 	lda	#$c2
-	sta	D0a01
+	sta	iwm_ph0_on
 	dex
 	bne	Lf36a
-Lf377:	bit	D0a0f
+Lf377:	bit	iwm_q7h
 	bpl	Lf377
 	lda	#$fc
-	sta	D0a00
+	sta	iwm_ph0_off
 	ldx	#$32
 	lda	#$4e
-Lf385:	bit	D0a0f
+Lf385:	bit	iwm_q7h
 	bpl	Lf385
-	sta	D0a00
+	sta	iwm_ph0_off
 	dex
 	bne	Lf385
 	bra	Lf3a1
 Lf392:	ldx	Zb6
 	lda	#$4e
-Lf396:	bit	D0a0f
+Lf396:	bit	iwm_q7h
 	bpl	Lf396
-	sta	D0a00
+	sta	iwm_ph0_off
 	dex
 	bne	Lf396
 Lf3a1:	ldx	#$0c
-Lf3a3:	bit	D0a0f
+Lf3a3:	bit	iwm_q7h
 	bpl	Lf3a3
-	stz	D0a00
+	stz	iwm_ph0_off
 	dex
 	bne	Lf3a3
 	ldx	#$03
-Lf3b0:	bit	D0a0f
+Lf3b0:	bit	iwm_q7h
 	bpl	Lf3b0
 	lda	#$a1
-	sta	D0a01
+	sta	iwm_ph0_on
 	dex
 	bne	Lf3b0
-Lf3bd:	bit	D0a0f
+Lf3bd:	bit	iwm_q7h
 	bpl	Lf3bd
 	lda	#$fe
-	sta	D0a00
+	sta	iwm_ph0_off
 	lda	Z14
-Lf3c9:	bit	D0a0f
+Lf3c9:	bit	iwm_q7h
 	bpl	Lf3c9
-	sta	D0a00
+	sta	iwm_ph0_off
 	lda	#$00
 	ldx	Z16
 	beq	Lf3d8
 	inc
-Lf3d8:	bit	D0a0f
+Lf3d8:	bit	iwm_q7h
 	bpl	Lf3d8
-	sta	D0a00
+	sta	iwm_ph0_off
 	lda	Z2a
-Lf3e2:	bit	D0a0f
+Lf3e2:	bit	iwm_q7h
 	bpl	Lf3e2
-	sta	D0a00
-Lf3ea:	bit	D0a0f
+	sta	iwm_ph0_off
+Lf3ea:	bit	iwm_q7h
 	bpl	Lf3ea
 	lda	#$02
-	sta	D0a00
-Lf3f4:	bit	D0a0f
+	sta	iwm_ph0_off
+Lf3f4:	bit	iwm_q7h
 	bpl	Lf3f4
-	stz	D0a02
+	stz	iwm_ph1_off
 	ldx	#$16
 	lda	#$4e
-Lf400:	bit	D0a0f
+Lf400:	bit	iwm_q7h
 	bpl	Lf400
-	sta	D0a00
+	sta	iwm_ph0_off
 	dex
 	bne	Lf400
 	ldx	#$0c
-Lf40d:	bit	D0a0f
+Lf40d:	bit	iwm_q7h
 	bpl	Lf40d
-	stz	D0a00
+	stz	iwm_ph0_off
 	dex
 	bne	Lf40d
 	ldx	#$03
-Lf41a:	bit	D0a0f
+Lf41a:	bit	iwm_q7h
 	bpl	Lf41a
 	lda	#$a1
-	sta	D0a01
+	sta	iwm_ph0_on
 	dex
 	bne	Lf41a
-Lf427:	bit	D0a0f
+Lf427:	bit	iwm_q7h
 	bpl	Lf427
 	lda	#$fb
-	sta	D0a00
+	sta	iwm_ph0_off
 	ldx	#$00
 	lda	#$00
-Lf435:	bit	D0a0f
+Lf435:	bit	iwm_q7h
 	bpl	Lf435
-	sta	D0a00
+	sta	iwm_ph0_off
 	dex
 	bne	Lf435
-Lf440:	bit	D0a0f
+Lf440:	bit	iwm_q7h
 	bpl	Lf440
-	sta	D0a00
+	sta	iwm_ph0_off
 	dex
 	bne	Lf440
-Lf44b:	bit	D0a0f
+Lf44b:	bit	iwm_q7h
 	bpl	Lf44b
-	stz	D0a02
+	stz	iwm_ph1_off
 	dec	Z1c
 	beq	Lf462
 	ldy	Z1c
@@ -7858,19 +7910,19 @@ Lf44b:	bit	D0a0f
 Lf462:	lda	#$04
 	sta	Z2c
 	ldx	#$05
-Lf468:	bit	D0a0f
+Lf468:	bit	iwm_q7h
 	bpl	Lf468
 	lda	#$4e
-	sta	D0a00
+	sta	iwm_ph0_off
 	dex
 	bne	Lf468
 	ldy	#$00
 	lda	#$f4
-	sta	D0a04
+	sta	iwm_ph2_off
 	ldx	#$4e
-Lf47e:	lda	D0a0f
+Lf47e:	lda	iwm_q7h
 	bpl	Lf47e
-	stx	D0a00
+	stx	iwm_ph0_off
 	bit	#$08
 	bne	Lf493
 	dey
@@ -7888,7 +7940,7 @@ Lf49c:	lda	#$00
 Lf49f:	sta	Z57
 	php
 	lda	#$18
-	sta	D0a06
+	sta	iwm_ph3_off
 	jsr	Sd76e
 	plp
 	rts
@@ -7919,17 +7971,17 @@ Lf519:	stz	Za3,x
 	bne	Lf519
 	stz	Z1e
 	stz	Z57
-	jsr	Sf713
+	jsr	smartport_bus_enable
 	tsx
 Lf526:	stz	D0100,x
 	dex
 	cpx	#$e1
 	bcs	Lf526
-	bit	D0a0d
+	bit	iwm_q6h
 	ldx	Z1e
 Lf533:	lda	#$64
 Lf535:	ldy	#$cd
-Lf537:	bit	D0a0e
+Lf537:	bit	iwm_q7l
 	bmi	Lf547
 	dey
 	bne	Lf537
@@ -7938,15 +7990,15 @@ Lf537:	bit	D0a0e
 	dex
 	bne	Lf533
 	bra	Lf550
-Lf547:	lda	D0a01
+Lf547:	lda	iwm_ph0_on
 	ldy	#$00
-Lf54c:	lda	D0a0c
+Lf54c:	lda	iwm_q6l
 	dey
 Lf550:	beq	Lf5ca
 	cmp	#$c3
 	bne	Lf54c
 	ldy	#$07
-Lf558:	lda	D0a0c
+Lf558:	lda	iwm_q6l
 	bpl	Lf558
 	and	#$7f
 	sta	Za3,y
@@ -7960,11 +8012,11 @@ Lf558:	lda	D0a0c
 	sta	Z18
 	ldx	Za5
 	beq	Lf596
-Lf575:	lda	D0a0c
+Lf575:	lda	iwm_q6l
 	bpl	Lf575
 	asl
 	sta	Z17
-Lf57d:	lda	D0a0c
+Lf57d:	lda	iwm_q6l
 	bpl	Lf57d
 	asl	Z17
 	bcs	Lf588
@@ -7980,24 +8032,24 @@ Lf593:	dex
 Lf596:	ldx	#$07
 	dec	Z18
 	bpl	Lf575
-Lf59c:	lda	D0a0c
+Lf59c:	lda	iwm_q6l
 	bpl	Lf59c
 	sta	Z2c
-Lf5a3:	lda	D0a0c
+Lf5a3:	lda	iwm_q6l
 	bpl	Lf5a3
 	sec
 	rol
 	and	Z2c
 	eor	Z1e
 	bne	Lf5d2
-Lf5b0:	lda	D0a0c
+Lf5b0:	lda	iwm_q6l
 	bpl	Lf5b0
 	cmp	#$c8
 	bne	Lf5ce
-	lda	D0a0d
-Lf5bc:	lda	D0a0e
+	lda	iwm_q6h
+Lf5bc:	lda	iwm_q7l
 	bmi	Lf5bc
-	lda	D0a00
+	lda	iwm_ph0_off
 	clc
 	rts
 
@@ -8012,29 +8064,29 @@ Lf5d4:	sta	Z57
 	sec
 	rts
 
-Sf5d8:	bit	D0a0e
-	bit	D0a0c
+Sf5d8:	bit	iwm_q7l
+	bit	iwm_q6l
 	jsr	Sf6dc
-	jsr	Sf713
-	lda	D0a0a
-	lda	D0a09
-	bit	D0a0d
+	jsr	smartport_bus_enable
+	lda	iwm_sel_drive_1
+	lda	iwm_motor_on
+	bit	iwm_q6h
 	ldy	#$fa
-Lf5ef:	lda	D0a0e
+Lf5ef:	lda	iwm_q7l
 	bmi	Lf5fc
 	dey
 	bne	Lf5ef
 	lda	#$84
 	jmp	Lf697
 
-Lf5fc:	lda	D0a01
+Lf5fc:	lda	iwm_ph0_on
 	ldy	#$05
 	lda	#$ff
-	sta	D0a0f
+	sta	iwm_q7h
 Lf606:	lda	Df754,y
-Lf609:	bit	D0a0c
+Lf609:	bit	iwm_q6l
 	bpl	Lf609
-	sta	D0a0d
+	sta	iwm_q6h
 	dey
 	bpl	Lf606
 	lda	#$00
@@ -8091,21 +8143,21 @@ Lf674:	lda	Z1e
 	jsr	Sf6d3
 	lda	#$c8
 	jsr	Sf6d3
-Lf688:	bit	D0a0c
+Lf688:	bit	iwm_q6l
 	bvs	Lf688
-	sta	D0a0d
+	sta	iwm_q6h
 	ldy	#$fa
 Lf692:	dey
 	bne	Lf69a
 	lda	#$82
 Lf697:	sec
 	bra	Lf6a2
-Lf69a:	lda	D0a0e
+Lf69a:	lda	iwm_q7l
 	bmi	Lf692
 	lda	#$00
 	clc
-Lf6a2:	bit	D0a00
-	bit	D0a0c
+Lf6a2:	bit	iwm_ph0_off
+	bit	iwm_q6l
 	sta	Z57
 	rts
 
@@ -8136,9 +8188,9 @@ Sf6cb:	pha
 	pla
 	ora	#$80
 
-Sf6d3:	bit	D0a0c
+Sf6d3:	bit	iwm_q6l
 	bpl	Sf6d3
-	sta	D0a0d
+	sta	iwm_q6h
 	rts
 
 Sf6dc:	lda	Z6c
@@ -8172,17 +8224,23 @@ Lf709:	lda	(Zab),y
 	bne	Lf709
 	rts
 
-Sf713:	jsr	Sf747
-	lda	D0a03
-	lda	D0a07
+
+; SmartPort Bus enable
+smartport_bus_enable:
+	jsr	iwm_all_phases_off
+	lda	iwm_ph1_on
+	lda	iwm_ph3_on
 	rts
 
-Sf71d:	jsr	Sf747
-	lda	D0a01
-	lda	D0a05
+
+; SmartPort Bus reset
+smartport_bus_reset:
+	jsr	iwm_all_phases_off
+	lda	iwm_ph0_on
+	lda	iwm_ph2_on
 	lda	#$50
 	jsr	Sf735
-	jsr	Sf747
+	jsr	iwm_all_phases_off
 	lda	#$05
 
 Sf730:	pha
@@ -8203,13 +8261,17 @@ Lf742:	nop
 	pla
 	rts
 
-Sf747:	bit	D0a00
-	bit	D0a02
-	bit	D0a04
-	bit	D0a06
+
+iwm_all_phases_off:
+	bit	iwm_ph0_off
+	bit	iwm_ph1_off
+	bit	iwm_ph2_off
+	bit	iwm_ph3_off
 	rts
 
+
 Df754:	fcb	$c3,$ff,$fc,$f3,$cf,$3f
+
 
 Sf75a:	lda	#$80
 	sta	Z19
@@ -8294,8 +8356,8 @@ Lf7eb:	jsr	Sf517
 	bcc	Lf7fe
 	jsr	Sf73c
 	sec
-	bit	D0a00
-	bit	D0a0c
+	bit	iwm_ph0_off
+	bit	iwm_q6l
 	dec	Z58
 	bne	Lf7eb
 Lf7fe:	rts
@@ -8314,7 +8376,7 @@ Sf812:	lda	#$17
 	jsr	Sd651
 	stz	Za6
 	jsr	Sf75a
-	jsr	Sf747
+	jsr	iwm_all_phases_off
 	jsr	Sf79c
 	bcs	Lf868
 	ldx	Z00
@@ -8344,7 +8406,7 @@ Lf854:	sty	Z6d
 	stx	Z6c
 	lda	#$82
 	sta	Z19
-	jsr	Sf747
+	jsr	iwm_all_phases_off
 	stz	Zab
 	lda	#$0c
 	sta	Zac
@@ -8374,7 +8436,7 @@ Lf895:	lda	Za6
 Lf897:	sta	Z56
 	bvc	Lf89d
 	sty	Z01
-Lf89d:	jsr	Sf747
+Lf89d:	jsr	iwm_all_phases_off
 	clc
 	rts
 
@@ -8396,7 +8458,7 @@ Lf8bf:	sta	Z33,x
 	inx
 	cpx	#$04
 	bcc	Lf8bf
-	bit	D0a08
+	bit	iwm_motor_off
 	lda	#$ff
 	sta	Z2f
 	jsr	Sd7cc
@@ -8405,8 +8467,8 @@ Lf8bf:	sta	Z33,x
 	jsr	Sd651
 	plx
 	stx	Z2f
-	jsr	Sf71d
-	jsr	Sf747
+	jsr	smartport_bus_reset
+	jsr	iwm_all_phases_off
 	stz	Z13
 Lf8e3:	lda	#$80
 	sta	Z19
@@ -8440,12 +8502,12 @@ Lf916:	inc	Z13
 	bcc	Lf928
 	lda	#$02
 	sta	Z13
-Lf928:	jsr	Sf747
-	bit	D0a08
+Lf928:	jsr	iwm_all_phases_off
+	bit	iwm_motor_off
 	lda	Z13
 	rts
 
-IRQ:	ldx	#$ff
+irq:	ldx	#$ff
 Lf933:	inx
 	bit	D0a80,x
 	ldy	#$00
@@ -8457,7 +8519,7 @@ Lf93e:	bne	Lf93b
 	bne	Lf939
 	txa
 	beq	Lf933
-	bra	IRQ
+	bra	irq
 
 	fillto	$ffda
 
@@ -8468,6 +8530,6 @@ Dffda:	fcb	$50,$c8,$a7,$b8,$ec,$67,$86,$46
 
 Dfffa:
 ; vectors
-	fdb	RESET
-	fdb	RESET
-	fdb	IRQ
+	fdb	reset
+	fdb	reset
+	fdb	irq
