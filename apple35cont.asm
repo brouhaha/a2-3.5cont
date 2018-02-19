@@ -664,7 +664,7 @@ HDcnfb:	fcb	$c0	; SmartPort ID type byte
 			;            (see _Apple IIgs Firmware Reference
 			;                  1 MB Apple IIgs Update)
 			;                SetFormatOption ($0a, $4a)
-			;                GetFOrmatOption ($0b, $4b)
+			;                GetFormatOption ($0b, $4b)
 			;   bit 1=0: not SCSI
 			;   bit 0=0: not RAM card
 
@@ -985,6 +985,7 @@ HLcc18:	lda	HDc801
 	jsr	HScbaa
 
 HLcc3b:	jmp	HLceb3
+
 
 HLcc3e:	lda	HZ46
 	sta	HDc80b
@@ -3818,11 +3819,11 @@ Dd277:	fdb	cmd_status
 	fdb	cmd_bad		; close
 	fdb	cmd_read
 	fdb	cmd_write
-	fdb	Lef73
-	fdb	Lee77
-	fdb	Le1ae
-	fdb	Le2c0
-	fdb	Le33b
+	fdb	cmd_set_format_option
+	fdb	cmd_get_format_option
+	fdb	cmd_unknown_0c
+	fdb	cmd_unknown_0d
+	fdb	cmd_unknown_0e
 
 
 cmd_bad:
@@ -3831,6 +3832,7 @@ Sd297:	clc
 	sta	Z56
 	stz	Z01
 	rts
+
 
 Ld29d:	lda	#$22
 	bra	Sd297
@@ -5666,7 +5668,9 @@ Le1aa:	sta	Z56
 	clc
 	rts
 
-Le1ae:	stz	Z56
+
+cmd_unknown_0c:
+	stz	Z56
 	stz	Z16
 	stz	Z14
 	stz	Z1b
@@ -5726,7 +5730,9 @@ De280:	fcb	$00,$40,$80,$c0,$00,$40,$80,$c0
 	fcb	$00,$40,$80,$c0,$00,$40,$80,$c0
 	fcb	$00,$40,$80,$c0,$00,$40,$80,$c0
 
-Le2c0:	lda	#$11
+
+cmd_unknown_0d:
+	lda	#$11
 	ldx	Z2f
 	bpl	Le2c9
 Le2c6:	jmp	Sd297
@@ -5790,7 +5796,9 @@ Le335:	lda	Z00
 Le339:	sec
 	rts
 
-Le33b:	lda	#$11
+
+cmd_unknown_0e:
+	lda	#$11
 	ldx	Z2f
 	bpl	Le344
 Le341:	jmp	Sd297
@@ -6874,6 +6882,7 @@ Lec11:	lda	Z8d+$8000-1,x
 	bne	Lec11
 	bra	Lec5f
 
+
 ResetHook:
 	ldx	Z70+$8000
 Lec1e:	lda	Z71+$8000,x
@@ -6882,6 +6891,7 @@ Lec1e:	lda	Z71+$8000,x
 	bne	Lec1e
 	bra	Lec5f
 
+
 Lec28:	lda	#$01
 	jsr	Secfe
 	lda	D0c00
@@ -6889,6 +6899,7 @@ Lec28:	lda	#$01
 	sta	Z5f
 	jsr	Sd97c
 	bra	Lec5f
+
 
 Lec39:	lda	#$01
 	jsr	Secfe
@@ -6902,6 +6913,7 @@ Lec39:	lda	#$01
 	sty	Z4a,x
 	bra	Lec5f
 
+
 Lec51:	lda	#$01
 	jsr	Secfe
 	bne	Lecbd
@@ -6910,6 +6922,7 @@ Lec51:	lda	#$01
 	sta	Z63
 Lec5f:	lda	#$00
 	jmp	Lebd0
+
 
 Lec64:	ldx	Z2f
 	jsr	Sd55a
@@ -6921,6 +6934,7 @@ Lec71:	bcc	Lec76
 
 Lec76:	rts
 
+
 Lec77:	ldx	Z2f
 	jsr	Sd94d
 	jsr	Sed05
@@ -6928,6 +6942,7 @@ Lec77:	ldx	Z2f
 	jsr	Sda30
 	clc
 	rts
+
 
 Lec86:	jsr	Sece3
 	sta	Z59
@@ -6939,6 +6954,7 @@ Lec86:	jsr	Sece3
 
 Lec93:	clc
 	rts
+
 
 Lec95:	jsr	Lecaa
 	lda	(Z64)
@@ -7051,6 +7067,7 @@ cmd_status:
 	cmp	#$01
 	bne	Led9c
 
+; status $01 - get Device Control Block
 	ldx	#controller_model_name_len
 	stx	D0c00
 Led7b:	lda	controller_model_name-1,x
@@ -7088,14 +7105,17 @@ Leda1:	stx	Z0b
 Ledb2:	clc
 	rts
 
+; status $00 - get device status
 Ledb4:	lda	Z33
 	sta	D0c00
+
 	ldx	#$01
 	lda	#$00
 Ledbd:	sta	D0c00,x
 	inx
 	cpx	#$08
 	bne	Ledbd
+
 	lda	#$01
 	sta	D0c02
 	lda	#$00
@@ -7160,10 +7180,13 @@ Lee3b:	lda	Dee4b,y
 	dex
 	jmp	Leda1
 
+
 Dee4b:	fcb	$08,"DISK 3.5        ",$01,$c0,$10,$10,$ff
 Dee61:	fcb	$08,"DISK 3.5HD      ",$01,$c1,$10,$10,$ff
 
-Lee77:	ldx	Z2f
+
+cmd_get_format_option:
+	ldx	Z2f
 	bpl	Lee80
 	lda	#$11
 	jmp	Sd297
@@ -7283,7 +7306,9 @@ Def63:	fcb	$00
 Def64:	fcb	$00,$20,$03,$40,$06,$40,$06,$a0
 	fcb	$05,$40,$0b,$40,$0b,$00,$00
 
-Lef73:	lda	Z06
+
+cmd_set_format_option:
+	lda	Z06
 	beq	Lef7a
 Lef77:	jmp	Lebca
 
