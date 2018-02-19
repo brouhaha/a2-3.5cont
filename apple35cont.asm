@@ -8064,6 +8064,7 @@ Lf5d4:	sta	Z57
 	sec
 	rts
 
+
 Sf5d8:	bit	iwm_q7l
 	bit	iwm_q6l
 	jsr	Sf6dc
@@ -8080,15 +8081,18 @@ Lf5ef:	lda	iwm_q7l
 	jmp	Lf697
 
 Lf5fc:	lda	iwm_ph0_on
-	ldy	#$05
+
+; send SmartPort Bus sync
+	ldy	#smartport_bus_sync_tab_len-1
 	lda	#$ff
 	sta	iwm_q7h
-Lf606:	lda	Df754,y
+Lf606:	lda	smartport_bus_sync_tab,y
 Lf609:	bit	iwm_q6l
 	bpl	Lf609
 	sta	iwm_q6h
 	dey
 	bpl	Lf606
+
 	lda	#$00
 	sta	Z1e
 	lda	Z2f
@@ -8270,7 +8274,9 @@ iwm_all_phases_off:
 	rts
 
 
-Df754:	fcb	$c3,$ff,$fc,$f3,$cf,$3f
+smartport_bus_sync_tab:
+	fcb	$c3,$ff,$fc,$f3,$cf,$3f
+smartport_bus_sync_tab_len	equ	*-smartport_bus_sync_tab
 
 
 Sf75a:	lda	#$80
